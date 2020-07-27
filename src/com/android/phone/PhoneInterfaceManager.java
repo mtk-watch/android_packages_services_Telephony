@@ -106,6 +106,7 @@ import android.telephony.ims.stub.ImsConfigImplBase;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 import android.text.TextUtils;
 import android.util.ArraySet;
+import android.util.EventLog;
 import android.util.Log;
 import android.util.Pair;
 import android.util.Slog;
@@ -113,6 +114,7 @@ import android.util.Slog;
 import com.android.ims.ImsException;
 import com.android.ims.ImsManager;
 import com.android.ims.internal.IImsServiceFeatureCallback;
+import com.android.internal.annotations.VisibleForTesting;
 import com.android.internal.telephony.CallManager;
 import com.android.internal.telephony.CallStateException;
 import com.android.internal.telephony.CarrierInfoManager;
@@ -1319,7 +1321,8 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
     }
 
     /** Private constructor; @see init() */
-    private PhoneInterfaceManager(PhoneGlobals app) {
+    @VisibleForTesting
+    /* package */ PhoneInterfaceManager(PhoneGlobals app) {
         mApp = app;
         mCM = PhoneGlobals.getInstance().mCM;
         mUserManager = (UserManager) app.getSystemService(Context.USER_SERVICE);
@@ -1913,6 +1916,7 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
                                 .setCallingPid(Binder.getCallingPid())
                                 .setCallingUid(Binder.getCallingUid())
                                 .setMethod("getCellLocation")
+                                .setMinSdkVersionForCoarse(Build.VERSION_CODES.BASE)
                                 .setMinSdkVersionForFine(Build.VERSION_CODES.Q)
                                 .build());
         switch (locationResult) {
@@ -2133,12 +2137,21 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
                                 .setCallingPid(Binder.getCallingPid())
                                 .setCallingUid(Binder.getCallingUid())
                                 .setMethod("requestCellInfoUpdate")
-                                .setMinSdkVersionForFine(Build.VERSION_CODES.Q)
+                                .setMinSdkVersionForCoarse(Build.VERSION_CODES.BASE)
+                                .setMinSdkVersionForFine(Build.VERSION_CODES.BASE)
                                 .build());
         switch (locationResult) {
             case DENIED_HARD:
+                if (getTargetSdk(callingPackage) < Build.VERSION_CODES.Q) {
+                    // Safetynet logging for b/154934934
+                    EventLog.writeEvent(0x534e4554, "154934934", Binder.getCallingUid());
+                }
                 throw new SecurityException("Not allowed to access cell info");
             case DENIED_SOFT:
+                if (getTargetSdk(callingPackage) < Build.VERSION_CODES.Q) {
+                    // Safetynet logging for b/154934934
+                    EventLog.writeEvent(0x534e4554, "154934934", Binder.getCallingUid());
+                }
                 try {
                     cb.onCellInfo(new ArrayList<CellInfo>());
                 } catch (RemoteException re) {
@@ -6325,6 +6338,10 @@ public class PhoneInterfaceManager extends ITelephony.Stub {
 
     @Override
     public List<UiccCardInfo> getUiccCardsInfo(String callingPackage) {
+        // Verify that tha callingPackage belongs to the calling UID
+        mApp.getSystemService(AppOpsManager.class)
+                .checkPackage(Binder.getCallingUid(), callingPackage);
+
         boolean hasReadPermission = false;
         try {
             enforceReadPrivilegedPermission("getUiccCardsInfo");
